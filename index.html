@@ -289,13 +289,11 @@
     raf = requestAnimationFrame(loop);
   }
 
-  // Back to the blank pre-launch state. The page can't send the user to the phone's home screen
-  // itself, so it tries to close the window and otherwise waits to replay on the next launch.
+  // Back to the blank pre-launch state, ready to replay.
   function reset() {
     cancelAnimationFrame(raf);
     state = 'idle';
     frame(-1);
-    try { window.close(); } catch (e) {}
   }
 
   cv.addEventListener('pointerdown', e => {
