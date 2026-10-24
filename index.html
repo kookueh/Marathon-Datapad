@@ -10,7 +10,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Datapad">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <style>
   :root { --bg: #000005; }
   html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; overscroll-behavior: none; }
@@ -189,13 +190,17 @@
 
   // Timer phase (0.80 – 1.72s)
   function drawTimer(t) {
-    const px = 88, py = 150, r = 80;
+    // pie + panel are laid out as one group centred on the screen (local frame is offset 10px from the 440 width)
+    const r = 80, gap = 56, panelW = 112;
+    const groupX = (W - (2 * r + gap + panelW)) / 2 - 10;
+    const px = groupX + r, py = 156;
+    const panelX = groupX + 2 * r + gap;
     const theta = rad(sweep(t));
 
     ctx.fillStyle = RED; glow(RED, 24);
-    ctx.fillRect(172, 15, 179, 282);
+    ctx.fillRect(panelX, 15, panelW, 282);
     noGlow();
-    asterisk(259, 237, 36, DARK_RED, 7);
+    asterisk(panelX + panelW / 2, 237, 30, DARK_RED, 6);
 
     // swept half-disc, starting at 6 o'clock and going clockwise
     ctx.fillStyle = RED; glow(RED, 20);
@@ -294,12 +299,15 @@
   }
 
   cv.addEventListener('pointerdown', e => {
-    if (state !== 'holding') return;
+    if (state === 'playing') return;
     const r = cv.getBoundingClientRect();
     const dpr = cv.width / r.width;
     const x = ((e.clientX - r.left) * dpr - view.ox) / view.scale;
     const y = ((e.clientY - r.top) * dpr - view.oy) / view.scale;
-    if (x >= BTN.x - BTN.pad && x <= BTN.x + BTN.w + BTN.pad && y >= BTN.y - BTN.pad && y <= BTN.y + BTN.h + BTN.pad) reset();
+    if (x >= BTN.x - BTN.pad && x <= BTN.x + BTN.w + BTN.pad && y >= BTN.y - BTN.pad && y <= BTN.y + BTN.h + BTN.pad) {
+      if (state === 'holding') reset();
+      else play();                          // pressing it again from the blank state starts a fresh run
+    }
   });
 
   // Coming back to the app after it was left (or reset) replays from the start.
