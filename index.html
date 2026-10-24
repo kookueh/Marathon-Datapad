@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Datapad</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#000005">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Datapad">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root { --bg: #000005; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; overscroll-behavior: none; }
+  body { -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  // Design space is the iPhone 18 Pro Max screen: 1320x2868 px at 3x = 440x956 pt.
+  const W = 440, H = 956;
+  const SPLIT = 470;             // y where the black screen meets the lower panel
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+
+  const WHITE = '#fff4fa', PINKWHITE = '#ffd9f4';
+  const RED = '#ff5262', LIME = '#c6e83a', VIOLET = '#e46cf0';
+  const DARK_RED = '#3a0f1c', DARK_LIME = '#1b2a0a';
+
+  // Timeline in seconds, measured from the reference clip (1.85s).
+  const T = { slideIn: 0.085, slideOut: 0.14, barIn: 0.105, barOutline: 0.14, split: 0.45, tabs: 0.49, glyphEnd: 0.80, pie: 0.82, done: 1.745 };
+  const START_DELAY = 0.5;       // seconds between launch and the first frame of the animation
+
+  // Piecewise-linear lookup through [time, value] keyframes read off the reference.
+  function keys(table, t) {
+    if (t <= table[0][0]) return table[0][1];
+    for (let i = 1; i < table.length; i++) {
+      const [t1, v1] = table[i];
+      if (t <= t1) { const [t0, v0] = table[i - 1]; return v0 + (v1 - v0) * (t - t0) / (t1 - t0); }
+    }
+    return table[table.length - 1][1];
+  }
+  const TAB_ANGLE = [[0.49, -80], [0.50, -72], [0.55, -40], [0.60, 0], [0.66, 25], [0.72, 40], [0.78, 52], [0.80, 54]];
+  const FILL = [[0.40, 0], [0.45, 0.15], [0.48, 0.27], [0.52, 0.36], [0.56, 0.47], [0.62, 0.7], [0.70, 0.94], [0.76, 1]];
+
+  const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+  const seg = (t, a, b) => clamp((t - a) / (b - a));
+  const ease = t => t * t * (3 - 2 * t);
+  const easeOut = t => 1 - (1 - t) * (1 - t);
+  const rad = d => d * Math.PI / 180;
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    cv.width = Math.round(cv.clientWidth * dpr);
+    cv.height = Math.round(cv.clientHeight * dpr);
+  }
+  addEventListener('resize', resize);
+
+  const rrect = (x, y, w, h, r) => { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); };
+  const glow = (c, b) => { ctx.shadowColor = c; ctx.shadowBlur = b; };
+  const noGlow = () => { ctx.shadowBlur = 0; };
+
+  // Dotted texture over a (possibly oversized) rect, aligned to the design grid.
+  function dots(x0, y0, x1, y1, step, color) {
+    ctx.fillStyle = color;
+    for (let j = Math.ceil(y0 / step) * step; j < y1; j += step)
+      for (let i = Math.ceil(x0 / step) * step; i < x1; i += step) ctx.fillRect(i, j, 1.4, 1.4);
+  }
+
+  function asterisk(cx, cy, r, color, w) {
+    ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 4;
+      ctx.beginPath();
+      ctx.moveTo(cx - Math.cos(a) * r, cy - Math.sin(a) * r);
+      ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      ctx.stroke();
+    }
+  }
+
+  // ---- Lower panel ----------------------------------------------------------
+
+  function key(cx, cy, w, h, angle, glyph) {
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(rad(angle));
+    ctx.strokeStyle = PINKWHITE; ctx.lineWidth = 3.5; glow(PINKWHITE, 14);
+    rrect(-w / 2, -h / 2, w, h, 20); ctx.stroke();
+    noGlow();
+    ctx.fillStyle = PINKWHITE;
+    if (glyph === 1) { ctx.beginPath(); ctx.arc(0, 0, 2.2, 0, 7); ctx.fill(); }
+    if (glyph === 2) { ctx.beginPath(); ctx.arc(-6, 0, 2.2, 0, 7); ctx.arc(6, 0, 2.2, 0, 7); ctx.fill(); }
+    ctx.restore();
+  }
+
+  function drawPanel(t, done) {
+    // panel body: lighter blue-black than the screen, with a lit top edge
+    const g = ctx.createLinearGradient(0, SPLIT, 0, H + 200);
+    g.addColorStop(0, '#0e1030'); g.addColorStop(0.5, '#0a0c24'); g.addColorStop(1, '#070818');
+    ctx.fillStyle = g; ctx.fillRect(-2000, SPLIT, 4440, 3000);
+    dots(-2000, SPLIT, 2440, 3000, 9, 'rgba(130,130,255,0.14)');
+
+    const edge = ctx.createLinearGradient(0, SPLIT, 0, SPLIT + 26);
+    edge.addColorStop(0, 'rgba(110,110,255,0.30)'); edge.addColorStop(1, 'rgba(110,110,255,0)');
+    ctx.fillStyle = edge; ctx.fillRect(-2000, SPLIT, 4440, 26);
+    ctx.fillStyle = 'rgba(150,150,255,0.55)'; ctx.fillRect(-2000, SPLIT, 4440, 1.5);
+
+    // controls, laid out in a local frame
+    const pulse = 0.5 + 0.5 * Math.sin(t * 8);
+    ctx.save(); ctx.translate(22, 548); ctx.scale(1.12, 1.12);
+
+    ctx.strokeStyle = PINKWHITE; ctx.lineWidth = 3.5; glow(PINKWHITE, 14);
+    rrect(0, 0, 142, 46, 23); ctx.stroke();
+    rrect(0, 0, 92, 46, 23); ctx.stroke();
+    noGlow();
+
+    glow('#fff', 22); ctx.fillStyle = '#fff'; rrect(6, 70, 46, 32, 9); ctx.fill(); noGlow();
+
+    key(140, 85, 80, 64, -28, 1);
+    key(220, 62, 70, 64, -3, 2);
+    key(139, 153, 70, 60, -20, 0);
+    ctx.fillStyle = PINKWHITE; ctx.fillRect(204, 138, 12, 2.5);
+
+    const mc = done ? LIME : VIOLET;
+    const bx = 230, by = 98, bw = 118, bh = 94;
+    glow(mc, 22 + pulse * 14); ctx.fillStyle = mc; rrect(bx, by, bw, bh, 22); ctx.fill(); noGlow();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3.5; glow('#fff', 12); rrect(bx - 6, by - 6, bw + 12, bh + 12, 28); ctx.stroke(); noGlow();
+    asterisk(bx + bw / 2, by + bh / 2, 22, done ? DARK_LIME : '#3a0d52', 5);
+    ctx.restore();
+  }
+
+  // ---- Screen (top half) ----------------------------------------------------
+
+  // Glyph phase (0 – 0.80s). Local frame: 420x320 content area.
+  function drawGlyph(t) {
+    const cx = 203, thick = 36, yL = 78;
+    const barA = ease(seg(t, T.barIn, T.barIn + 0.02));
+    ctx.fillStyle = WHITE; glow(PINKWHITE, 16);
+
+    if (t < T.split) {
+      // short bar anchored left, stretching to full width just before it splits
+      const w = 100 + 47 * seg(t, 0.30, 0.38) + 107 * seg(t, 0.38, T.split);
+      ctx.globalAlpha = barA;
+      ctx.fillRect(76, yL, w, thick);
+      ctx.globalAlpha = 1;
+    } else {
+      const yR = yL + 14 * ease(seg(t, 0.5, 0.66));
+      const bw = 124, gap = 6;
+      const lx = cx - gap / 2 - bw, rx = cx + gap / 2;
+      ctx.fillRect(lx, yL, bw, thick);
+      ctx.fillRect(rx, yR, bw, thick);
+
+      // rotating tabs: left one rises from the bar's right end, right one drops from its left end
+      const len = 58 * easeOut(seg(t, T.tabs, T.tabs + 0.015));
+      const ang = keys(TAB_ANGLE, t);
+      const tabW = 42;
+      if (len > 1) {
+        ctx.save(); ctx.translate(lx + bw - 28, yL + thick / 2); ctx.rotate(rad(ang));
+        ctx.fillRect(-tabW / 2, -len, tabW, len + 6); ctx.restore();
+        ctx.save(); ctx.translate(rx + 28, yR + thick / 2); ctx.rotate(rad(ang + 180));
+        ctx.fillRect(-tabW / 2, -len, tabW, len + 6); ctx.restore();
+      }
+    }
+    noGlow();
+
+    // progress bar
+    const px = 94, py = 212, pw = 194, ph = 26;
+    ctx.globalAlpha = ease(seg(t, T.barOutline, T.barOutline + 0.04));
+    ctx.strokeStyle = WHITE; ctx.lineWidth = 2.5; glow(PINKWHITE, 10);
+    ctx.strokeRect(px, py, pw, ph);
+    noGlow();
+    ctx.fillStyle = WHITE; ctx.fillRect(px + 3, py + 3, (pw - 6) * keys(FILL, t), ph - 6);
+    ctx.globalAlpha = 1;
+  }
+
+  // Sweep angle in degrees, interpolated between values read off the reference.
+  const SWEEP = [[0.80, 35], [0.98, 90], [1.10, 135], [1.50, 315], [1.64, 360]];
+  function sweep(t) {
+    if (t >= SWEEP[SWEEP.length - 1][0]) return 360;
+    for (let i = 1; i < SWEEP.length; i++) {
+      const [t1, a1] = SWEEP[i];
+      if (t <= t1) { const [t0, a0] = SWEEP[i - 1]; return a0 + (a1 - a0) * clamp((t - t0) / (t1 - t0)); }
+    }
+    return SWEEP[0][1];
+  }
+
+  // Timer phase (0.80 – 1.72s)
+  function drawTimer(t) {
+    const px = 88, py = 150, r = 80;
+    const theta = rad(sweep(t));
+
+    ctx.fillStyle = RED; glow(RED, 24);
+    ctx.fillRect(172, 15, 179, 282);
+    noGlow();
+    asterisk(259, 237, 36, DARK_RED, 7);
+
+    // swept half-disc, starting at 6 o'clock and going clockwise
+    ctx.fillStyle = RED; glow(RED, 20);
+    ctx.beginPath(); ctx.moveTo(px, py);
+    ctx.arc(px, py, r, Math.PI / 2, Math.PI / 2 + theta); ctx.closePath(); ctx.fill();
+    noGlow();
+
+    // white sweeping line through the pivot
+    const a = Math.PI / 2 + theta, hl = 92;
+    ctx.strokeStyle = WHITE; ctx.lineWidth = 8; ctx.lineCap = 'butt'; glow(WHITE, 12);
+    ctx.beginPath();
+    ctx.moveTo(px - Math.cos(a) * hl, py - Math.sin(a) * hl);
+    ctx.lineTo(px + Math.cos(a) * hl, py + Math.sin(a) * hl);
+    ctx.stroke(); noGlow();
+  }
+
+  // Success phase (1.72s on): lime fills the whole top half, edge to edge.
+  function drawDone() {
+    ctx.fillStyle = LIME; ctx.fillRect(-2000, -2000, 4440, SPLIT + 2000);
+    const u = 29, size = 26;
+    const cells = [[0, 0], [1, 1], [2, 2], [3, 1], [4, 0], [5, -1], [6, -2], [7, -3]];
+    const ox = W / 2 - 114, oy = 266 + 10;
+    ctx.fillStyle = DARK_LIME;
+    for (const [x, y] of cells) ctx.fillRect(ox + x * u, oy + y * u, size, size);
+    ctx.strokeStyle = '#4a6a14'; ctx.lineWidth = 4;
+    for (const [x, y] of [[34, 92], [W - 34, 92], [34, SPLIT - 34], [W - 34, SPLIT - 34]]) {
+      ctx.beginPath(); ctx.moveTo(x - 10, y); ctx.lineTo(x + 10, y); ctx.moveTo(x, y - 10); ctx.lineTo(x, y + 10); ctx.stroke();
+    }
+  }
+
+  function drawScreen(t) {
+    // black behind the screen; before the slide-out this is all the top half shows
+    ctx.fillStyle = '#000004'; ctx.fillRect(-2000, -2000, 4440, SPLIT + 2000);
+    if (t < T.slideIn) return;
+
+    // the black screen rises out from behind the panel, carrying its contents with it
+    const p = 1 - Math.pow(1 - seg(t, T.slideIn, T.slideOut), 1.5);
+    const dy = (1 - p) * SPLIT;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(-2000, p < 1 ? dy : -2000, 4440, p < 1 ? SPLIT - dy : SPLIT + 2000); ctx.clip();
+    ctx.translate(0, dy);
+    ctx.fillStyle = '#000004'; ctx.fillRect(-2000, -2000, 4440, SPLIT + 2000);
+    dots(-2000, -2000, 2440, SPLIT, 10, 'rgba(120,120,255,0.06)');
+
+    if (t >= T.done) drawDone();
+    else if (t >= T.barIn) {
+      ctx.save(); ctx.translate(10, 110);       // 420x320 content area, clear of the Dynamic Island
+      if (t >= T.glyphEnd) drawTimer(t); else drawGlyph(t);
+      ctx.restore();
+    }
+
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    for (let y = -600; y < SPLIT; y += 4) ctx.fillRect(-2000, y, 4440, 1);
+    ctx.restore();
+  }
+
+  let view = { scale: 1, ox: 0, oy: 0 };
+
+  function frame(t) {
+    // fit the 440x956 design to the screen; backgrounds are oversized so other aspect ratios stay full-bleed
+    const scale = Math.min(cv.width / W, cv.height / H);
+    view = { scale, ox: (cv.width - W * scale) / 2, oy: (cv.height - H * scale) / 2 };
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#000004'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.setTransform(scale, 0, 0, scale, view.ox, view.oy);
+
+    drawScreen(t);
+    drawPanel(t, t >= T.done);
+  }
+
+  // The green button's hit area, in design coordinates (panel frame: translate 22,548 / scale 1.12).
+  const BTN = { x: 22 + 230 * 1.12, y: 548 + 98 * 1.12, w: 118 * 1.12, h: 94 * 1.12, pad: 14 };
+
+  let start = 0, raf = 0, state = 'idle';   // idle -> playing -> holding -> idle
+
+  function play() {
+    cancelAnimationFrame(raf);
+    state = 'playing';
+    start = performance.now() + START_DELAY * 1000;
+    const loop = now => {
+      const t = (now - start) / 1000;
+      frame(Math.max(t, -1));                // before the delay ends: the idle, blank screen
+      if (t >= T.done) state = 'holding';    // success flash holds until the button is pressed
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+  }
+
+  // Back to the blank pre-launch state. The page can't send the user to the phone's home screen
+  // itself, so it tries to close the window and otherwise waits to replay on the next launch.
+  function reset() {
+    cancelAnimationFrame(raf);
+    state = 'idle';
+    frame(-1);
+    try { window.close(); } catch (e) {}
+  }
+
+  cv.addEventListener('pointerdown', e => {
+    if (state !== 'holding') return;
+    const r = cv.getBoundingClientRect();
+    const dpr = cv.width / r.width;
+    const x = ((e.clientX - r.left) * dpr - view.ox) / view.scale;
+    const y = ((e.clientY - r.top) * dpr - view.oy) / view.scale;
+    if (x >= BTN.x - BTN.pad && x <= BTN.x + BTN.w + BTN.pad && y >= BTN.y - BTN.pad && y <= BTN.y + BTN.h + BTN.pad) reset();
+  });
+
+  // Coming back to the app after it was left (or reset) replays from the start.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state !== 'playing') play();
+  });
+  addEventListener('pageshow', e => { if (e.persisted) play(); });
+
+  window.__frame = frame;
+  window.__stop = () => cancelAnimationFrame(raf);
+  window.__state = () => state;
+
+  resize();
+  play();
+
+  if ('serviceWorker' in navigator) {
+    addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+})();
+</script>
+</body>
+</html>
